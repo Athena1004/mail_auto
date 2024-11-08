@@ -1,0 +1,102 @@
+#!/user/bin/env python3
+# -*- coding: utf-8 -*-
+
+import os
+import re
+from PyPDF2 import PdfReader
+from pdfminer.converter import PDFPageAggregator
+from pdfminer.layout import LAParams,LTRect
+from pdfminer.pdfpage import PDFPage
+from pdfminer.pdfparser import PDFParser
+from pdfminer.pdfdocument import PDFDocument,PDFTextExtractionNotAllowed
+from pdfminer.pdfinterp import PDFResourceManager, PDFPageInterpreter
+
+
+import pandas as pd
+import pdfplumber
+
+CurrentDir = os.path.dirname(os.path.abspath(__file__))
+
+
+def get_table_page(pdf_pages, table_pattern):
+    # Create a PDF resource manager object that stores shared resources .
+    resource = PDFResourceManager()
+    # Set parameters for analysis .
+    laparam = LAParams()
+    # Create a PDF page aggregator object .
+    device = PDFPageAggregator(resource, laparams=laparam)
+    # Create s PDF interpreter object .
+    interpreter = PDFPageInterpreter(resource, device)
+
+
+    page_num_list = list()
+    start_flag = False
+    page_number = 0
+    for each_page in pdf_pages:
+        page_number += 1
+        if page_number <= 7:     # skip first 7 pages
+            continue
+        # Receive the LTpage object for the page
+        interpreter.process_page(each_page)
+        # Use aggregator to fetch content .
+        pdf_layout = device.get_result()
+
+        # 这里layout是一个LTPage对象 里面存放着 这个page解析出的各种对象 一般包括LTTextBox,
+        # LTFigure, LTImage, LTTextBoxHorizontal 等等 想要获取文本就获得对象的text属性
+
+        for each_layout in pdf_layout:
+            if hasattr(each_layout, 'get_text'):
+                text_ = each_layout.get_text()
+                if table_pattern.search(text_):
+                    start_flag = True
+                    page_num_list.append(page_number)
+                    break
+                    #return page_number
+        else:
+            if start_flag:
+                break
+    return  page_num_list
+
+
+# pdf_input = input('Please input your target PDF file: ')
+pdf_name = 'tms320f280025'+ '.pdf'
+hpec_pdf = open(pdf_name, 'rb')
+
+# using PDFminer to obtaining the content of document
+# Create a PDFparser object associated with the file object
+parser_pdf = PDFParser(hpec_pdf)
+
+# using PyPDF to getting page number
+pypdf2_pdf = PdfReader(hpec_pdf)
+pagecount = len(pypdf2_pdf.pages)
+
+# Create a PDF document object that store the document structure .
+doc = PDFDocument(parser_pdf, password='')
+
+#  Link the parser and document object .
+parser_pdf.set_document(doc)
+
+# Check if the document allows text extraction . if not . abort .
+if not doc.is_extractable:
+    raise PDFTextExtractionNotAllowed
+
+
+# Process each page contained in the document .
+# gets_pages = doc.get_pages()
+gets_pages = PDFPage.create_pages(doc)
+targetPattern = re.compile(r'table.*pin\s+attribute', re.IGNORECASE)
+            
+page_num_list = get_table_page(gets_pages, targetPattern)
+print(page_num_list)
+
+# extract table
+tables = list()
+for page_ in page_num_list:
+    pdf = pdfplumber.open(pdf_name)
+    page = pdf.pages[page_ - 1]
+    table = page.extract_table()
+    tables.extend(table)
+df = pd.DataFrame(tables)
+df.to_csv(os.path.join(CurrentDir, f"{pdf_name}_tables.csv"), header=False, index=False)
+
+
